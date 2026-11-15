@@ -1,0 +1,44 @@
+{
+    "geode": "5.9.0",
+    "gd": {
+        "win": "2.2081",
+        "android": "2.2081",
+        "mac": "2.2081",
+        "ios": "2.2081"
+    },
+    "id": "levelai.ai-level-builder",
+    "name": "AI Level Builder",
+    "version": "v1.0.0",
+    "developer": "LevelAI",
+    "description": "Type what you want and get a level: a built-in generator plus an AI assistant in the editor.",
+    "tags": ["editor", "utility", "online"],
+    "settings": {
+        "api-key": {
+            "type": "string",
+            "name": "Claude API key",
+            "description": "Needed only for the <cy>Ask AI</c> button. Create one at <cb>console.anthropic.com</c>. It is stored on this device in the mod's settings file and is only ever sent to api.anthropic.com. The offline <cg>Generate</c> button works without it.",
+            "default": ""
+        },
+        "model": {
+            "type": "string",
+            "name": "AI model",
+            "description": "Which Claude model the <cy>Ask AI</c> button uses.",
+            "default": "claude-opus-5-5"
+        },
+        "effort": {
+            "type": "string",
+            "name": "AI effort",
+            "description": "How hard the AI thinks. Higher is slower and costs more.",
+            "default": "medium",
+            "one-of": ["low", "medium", "high"]
+        },
+        "context-objects": {
+            "type": "int",
+            "name": "Objects shown to the AI",
+            "description": "How many of the level's existing objects are sent to the AI so it can see and edit them. More objects cost more per request.",
+            "default": 600,
+            "min": 0,
+            "max": 5000
+        }
+    }
+}
