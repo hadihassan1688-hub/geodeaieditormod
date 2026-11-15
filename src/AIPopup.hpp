@@ -25,11 +25,16 @@ protected:
     void onGenerate(cocos2d::CCObject*);
     void onAskAI(cocos2d::CCObject*);
     void onSettings(cocos2d::CCObject*);
+    void onReroll(cocos2d::CCObject*);
+    void onQuickAsk(cocos2d::CCObject*);
+    void onHistory(cocos2d::CCObject*);
+    void tick(float dt);
 
     void refreshLabels();
     void setStatus(std::string const& text);
     void setBusy(bool busy);
-    void generateOffline();
+    void generateOffline(bool allowClear = true);
+    void rememberPrompt(std::string const& prompt);
     void applyPlan(ai::Plan const& plan);
     // Runs `action` right away, or after a confirmation when it would wipe a level.
     void confirmClear(bool willClear, geode::Function<void()> action);
@@ -44,9 +49,13 @@ protected:
     CCMenuItemSpriteExtra* m_generateBtn = nullptr;
     CCMenuItemSpriteExtra* m_askBtn = nullptr;
     cocos2d::CCNode* m_spinner = nullptr;
+    cocos2d::CCLabelBMFont* m_timer = nullptr;
+    float m_elapsed = 0;
 
     lb::Settings m_settings;
     int m_lengthIndex = 2;
+    int m_historyIndex = -1;
+    bool m_canReroll = false; // the last thing done was an offline Generate that can be undone
     std::string m_pendingPrompt;
     geode::async::TaskHolder<geode::utils::web::WebResponse> m_request;
 };

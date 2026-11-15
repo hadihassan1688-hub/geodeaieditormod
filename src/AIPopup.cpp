@@ -18,6 +18,14 @@ constexpr char const* DIFFICULTY_NAMES[] = {
     "Easy Demon", "Hard Demon", "Insane Demon", "Extreme Demon",
 };
 constexpr size_t MAX_TURNS = 6;
+constexpr size_t MAX_HISTORY = 12;
+
+// Tags of the quick buttons, each with the request it sends to the AI.
+constexpr char const* QUICK_PROMPTS[] = {
+    "Make the whole level easier: widen the gaps, remove some of the hardest hazards, and keep it beatable. Use edits.",
+    "Make the whole level harder: tighten the gaps and add a few more hazards without making anything impossible. Use edits and objects.",
+    "Decorate the level: add background pulses and colour changes that match the gameplay, without changing any gameplay objects.",
+};
 
 // The conversation with the AI survives closing and reopening the popup.
 std::vector<ai::Turn> g_history;
@@ -84,19 +92,39 @@ bool AIPopup::init(EditorUI* ui) {
     auto settingsBtn = CCMenuItemSpriteExtra::create(settingsSpr, this, menu_selector(AIPopup::onSettings));
     m_buttonMenu->addChildAtPosition(settingsBtn, Anchor::TopRight, {-22, -22});
 
-    m_status = MDTextArea::create("", {400.f, 120.f});
-    m_mainLayer->addChildAtPosition(m_status, Anchor::Bottom, {0, 72});
+    // quick row: re-roll, three one-tap AI requests, prompt history
+    auto chip = [this](char const* caption, SEL_MenuHandler handler, float x, int tag) {
+        auto spr = ButtonSprite::create(caption, 78, true, "bigFont.fnt", "GJ_button_04.png", 22.f, 0.4f);
+        auto btn = CCMenuItemSpriteExtra::create(spr, this, handler);
+        btn->setTag(tag);
+        m_buttonMenu->addChildAtPosition(btn, Anchor::Top, {x, -166});
+    };
+    chip("Re-roll", menu_selector(AIPopup::onReroll), -170, 0);
+    chip("Easier", menu_selector(AIPopup::onQuickAsk), -85, 0);
+    chip("Harder", menu_selector(AIPopup::onQuickAsk), 0, 1);
+    chip("Decorate", menu_selector(AIPopup::onQuickAsk), 85, 2);
+    chip("Last prompt", menu_selector(AIPopup::onHistory), 170, 0);
+
+    m_status = MDTextArea::create("", {400.f, 96.f});
+    m_mainLayer->addChildAtPosition(m_status, Anchor::Bottom, {0, 56});
 
     m_spinner = LoadingSpinner::create(30.f);
     m_spinner->setVisible(false);
-    m_mainLayer->addChildAtPosition(m_spinner, Anchor::Bottom, {0, 72});
+    m_mainLayer->addChildAtPosition(m_spinner, Anchor::Bottom, {0, 74});
+
+    m_timer = CCLabelBMFont::create("", "chatFont.fnt");
+    m_timer->setScale(0.8f);
+    m_timer->setVisible(false);
+    m_mainLayer->addChildAtPosition(m_timer, Anchor::Bottom, {0, 40});
 
     this->refreshLabels();
     this->setStatus(
-        "**Generate** builds a level on this device from the pickers above. Words in the box "
-        "count too, like `long hell wave level, extreme, seed 42`.\n\n"
+        "**Generate** builds a level on this device and reads your prompt: modes in order, "
+        "time and speed for each, colours and difficulty, like `10s fast wave then 8s ship, red, hard`.\n\n"
         "**Ask AI** sends your request to Claude, which can build, add to, restyle or edit "
-        "the level. It needs an API key: tap the gear."
+        "the level. It needs an API key: tap the gear.\n\n"
+        "**Re-roll** undoes your last Generate and makes a new one. **Easier**, **Harder** and "
+        "**Decorate** send a ready-made request to the AI."
     );
     return true;
 }
@@ -111,7 +139,27 @@ void AIPopup::setStatus(std::string const& text) {
     m_status->setString(text.c_str());
 }
 
+void AIPopup::tick(float dt) {
+    m_elapsed += dt;
+    int secs = (int)m_elapsed;
+    if (secs < 2) {
+        m_timer->setString("Sending your request...");
+    } else {
+        m_timer->setString(fmt::format(
+            "The AI is designing your level... {}s\n(big levels take 30 to 120 seconds)", secs
+        ).c_str());
+    }
+}
+
 void AIPopup::setBusy(bool busy) {
+    if (busy) {
+        m_elapsed = 0;
+        this->tick(0);
+        this->schedule(schedule_selector(AIPopup::tick), 0.5f);
+    } else {
+        this->unschedule(schedule_selector(AIPopup::tick));
+    }
+    m_timer->setVisible(busy);
     m_spinner->setVisible(busy);
     m_status->setVisible(!busy);
     m_generateBtn->setEnabled(!busy);
@@ -157,22 +205,64 @@ void AIPopup::onGenerate(CCObject*) {
     this->confirmClear(m_replaceToggle->isToggled(), [this] { this->generateOffline(); });
 }
 
-void AIPopup::generateOffline() {
-    lb::Settings s = m_settings;
-    s.seconds = LENGTHS[m_lengthIndex];
-    s.seed = randomSeed();
-    std::string understood = lb::applyPromptKeywords(m_prompt->getString(), s);
+void AIPopup::onReroll(CCObject*) {
+    if (!m_canReroll) {
+        this->setStatus("Nothing to re-roll yet. Press **Generate** first; Re-roll then undoes it and builds a new one with the same settings.");
+        return;
+    }
+    // The last Generate was one undoable paste, so undoing removes exactly it.
+    m_ui->undoLastAction(nullptr);
+    m_canReroll = false;
+    this->generateOffline(false);
+}
 
-    bool replace = m_replaceToggle->isToggled();
-    if (replace) bridge::clearLevel(m_ui);
+void AIPopup::rememberPrompt(std::string const& prompt) {
+    std::string trimmed = string::trim(prompt);
+    if (trimmed.empty()) return;
+    auto history = Mod::get()->getSavedValue<std::vector<std::string>>("prompt-history");
+    std::erase(history, trimmed);
+    history.insert(history.begin(), trimmed);
+    if (history.size() > MAX_HISTORY) history.resize(MAX_HISTORY);
+    Mod::get()->setSavedValue("prompt-history", history);
+    m_historyIndex = -1;
+}
+
+void AIPopup::onHistory(CCObject*) {
+    auto history = Mod::get()->getSavedValue<std::vector<std::string>>("prompt-history");
+    if (history.empty()) {
+        this->setStatus("No earlier prompts yet. Prompts you use with Generate or Ask AI are remembered here.");
+        return;
+    }
+    m_historyIndex = (m_historyIndex + 1) % (int)history.size();
+    m_prompt->setString(history[m_historyIndex]);
+}
+
+void AIPopup::onQuickAsk(CCObject* sender) {
+    int tag = static_cast<CCNode*>(sender)->getTag();
+    if (tag < 0 || tag > 2) return;
+    m_prompt->setString(QUICK_PROMPTS[tag]);
+    this->onAskAI(nullptr);
+}
+
+void AIPopup::generateOffline(bool allowClear) {
+    lb::Settings base = m_settings;
+    base.seconds = LENGTHS[m_lengthIndex];
+    base.seed = randomSeed();
+    auto plan = lb::planFromPrompt(m_prompt->getString(), base);
+    lb::Settings s = plan.settings;
+    std::string understood = plan.summary;
+    this->rememberPrompt(m_prompt->getString());
+
+    if (allowClear && m_replaceToggle->isToggled()) bridge::clearLevel(m_ui);
 
     lb::Request req;
-    req.sections = lb::presetSections(s);
-    req.theme = lb::presetTheme(s.style);
+    req.sections = plan.sections;
+    req.theme = plan.theme;
     req.seed = s.seed;
-    req.startBlock = replace ? 0 : bridge::levelEndBlock(m_ui);
+    req.startBlock = bridge::levelEndBlock(m_ui);
     auto result = lb::generate(req);
     int added = bridge::addObjects(m_ui, result.objs);
+    m_canReroll = added > 0;
 
     std::string parts;
     for (auto const& sec : req.sections) {
@@ -180,9 +270,9 @@ void AIPopup::generateOffline() {
         parts += lb::modeName(sec.mode);
     }
     this->setStatus(fmt::format(
-        "Built **{}**.\n\nAdded {} objects from x={:.0f} to x={:.0f} blocks: {}.\n\n"
-        "Playtest it and fix anything that feels unfair. One undo removes it. "
-        "Type `seed {}` to get this exact layout again.",
+        "I read your prompt as: **{}**\n\nAdded {} objects from x={:.0f} to x={:.0f} blocks ({}).\n\n"
+        "Playtest it and fix anything that feels unfair. One undo removes it, or press "
+        "**Re-roll** for a new one. Type `seed {}` to get this exact layout again.",
         understood, added, req.startBlock, result.endBlock, parts, s.seed
     ));
 }
@@ -207,6 +297,8 @@ void AIPopup::onAskAI(CCObject*) {
     std::string context = bridge::describeLevel(m_ui, maxObjects, listed, total);
 
     m_pendingPrompt = prompt;
+    this->rememberPrompt(prompt);
+    m_canReroll = false;
     this->setBusy(true);
     auto request = ai::buildRequest(prompt, context, g_history);
     m_request.spawn(request.post(ai::API_URL), [this, listed, total](web::WebResponse res) {

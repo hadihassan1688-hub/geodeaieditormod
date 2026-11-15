@@ -46,10 +46,11 @@ struct Theme {
     Color hazard{255, 255, 255};
     bool pulses = false; // background pulse triggers through the level
     bool saws = false;   // extra sawblades in open areas
+    bool cycles = false; // background hue changes from section to section
 };
 
-enum class Style { Classic, HellDemon, NeonMix, WaveRush, SkyFlight };
-constexpr int STYLE_COUNT = 5;
+enum class Style { Classic, HellDemon, NeonMix, WaveRush, SkyFlight, Toxic, Space, Sunset, Ice, Candy };
+constexpr int STYLE_COUNT = 10;
 char const* styleName(Style s);
 
 struct Settings {
@@ -81,6 +82,20 @@ std::vector<Section> presetSections(Settings const& s);
 // Reads plain words out of a prompt ("long hell wave level, extreme, fast")
 // and adjusts the settings. Returns a short description of what it understood.
 std::string applyPromptKeywords(std::string const& prompt, Settings& s);
+
+// Everything the offline generator understood from a prompt.
+struct PromptPlan {
+    Settings settings;
+    Theme theme;
+    std::vector<Section> sections;
+    std::string summary; // human readable, shown to the player
+};
+
+// Reads a prompt such as "10s fast wave then 8 second ship, red, hard, seed 7".
+// Understands: game modes in the order written, a duration and speed per mode,
+// a total length, difficulty words, style words, colours and a seed. Anything
+// it does not name falls back to `base` and the style presets.
+PromptPlan planFromPrompt(std::string const& prompt, Settings base);
 
 Result generate(Request const& req);
 

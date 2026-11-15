@@ -45,6 +45,13 @@ Speeds in blocks per second: half 8.4, normal 10.4, double 12.9, triple 15.6, qu
 # Style
 When the player names an existing level or creator as a reference, make an original level with that general mood, pacing and difficulty; do not try to reproduce its layout. "Hell" or "demon" style means dark red and black colours, fast speeds, tight wave and ship parts, sawblades and pulses.
 
+# Common requests
+- "Easier": use edits, not a rebuild. Delete about every second hazard in the hardest stretches (spikes, sawblades), keep every portal, trigger, orb and pad, and never delete solid blocks that form a corridor. Do not move portals.
+- "Harder": add hazards with objects in open stretches, at least 2 blocks away from existing hazards and never inside blocks, and leave every existing path passable.
+- "Decorate" or "make it prettier": add only triggers (colour 899, pulse 1006) placed above the playfield at y=12 to 16, spaced so the colours change with the music-like pacing of the level; leave gameplay objects alone.
+- Recolour requests: use the theme field, which replaces the colour triggers at the start.
+- If the level is empty and the player asks for changes, say so in reply instead of inventing objects.
+
 # reply
 A short, plain message to the player: what you did, or the answer to their question. If the request is only a question, leave every other part of the plan empty.)PROMPT";
 

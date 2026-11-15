@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <random>
+#include <set>
 
 namespace lb {
 
@@ -317,13 +318,38 @@ Color scaled(Color c, float f) {
     return Color{(int)(c.r * f), (int)(c.g * f), (int)(c.b * f)};
 }
 
+// Rotates the colour channels, used to change the hue between sections.
+Color rotated(Color c, int k) {
+    switch (((k % 3) + 3) % 3) {
+        case 1: return Color{c.b, c.r, c.g};
+        case 2: return Color{c.g, c.b, c.r};
+        default: return c;
+    }
+}
+
+// Safety pass: one block per cell, and no spike buried inside a block.
+void sanitize(std::vector<Obj>& objs) {
+    auto key = [](Obj const& o) {
+        long long cx = (long long)std::floor(o.x / BLOCK), cy = (long long)std::floor(o.y / BLOCK);
+        return cx * 100000 + cy;
+    };
+    std::set<long long> blocks;
+    std::vector<Obj> kept;
+    kept.reserve(objs.size());
+    for (auto& o : objs) {
+        if (o.id == ID_BLOCK && !blocks.insert(key(o)).second) continue;
+        kept.push_back(std::move(o));
+    }
+    objs.clear();
+    for (auto& o : kept) {
+        if (o.id == ID_SPIKE && blocks.count(key(o))) continue;
+        objs.push_back(std::move(o));
+    }
+}
+
 std::string lower(std::string s) {
     for (auto& ch : s) ch = (char)std::tolower((unsigned char)ch);
     return s;
-}
-
-bool has(std::string const& text, char const* word) {
-    return text.find(word) != std::string::npos;
 }
 
 } // namespace
@@ -339,6 +365,11 @@ char const* styleName(Style s) {
         case Style::NeonMix: return "Neon Mix";
         case Style::WaveRush: return "Wave Rush";
         case Style::SkyFlight: return "Sky Flight";
+        case Style::Toxic: return "Toxic";
+        case Style::Space: return "Space";
+        case Style::Sunset: return "Sunset";
+        case Style::Ice: return "Ice";
+        case Style::Candy: return "Candy";
     }
     return "Classic";
 }
@@ -395,7 +426,7 @@ Theme presetTheme(Style style) {
         case Style::NeonMix:
             t.bg = {20, 0, 60}; t.ground = {60, 0, 140};
             t.block = {0, 255, 220}; t.hazard = {255, 0, 200};
-            t.pulses = true;
+            t.pulses = true; t.cycles = true;
             break;
         case Style::WaveRush:
             t.bg = {0, 30, 60}; t.ground = {0, 60, 110};
@@ -404,6 +435,29 @@ Theme presetTheme(Style style) {
         case Style::SkyFlight:
             t.bg = {90, 170, 255}; t.ground = {40, 110, 210};
             t.block = {255, 255, 255}; t.hazard = {255, 220, 120};
+            break;
+        case Style::Toxic:
+            t.bg = {10, 40, 5}; t.ground = {20, 70, 10};
+            t.block = {120, 255, 40}; t.hazard = {230, 255, 0};
+            t.pulses = true; t.saws = true;
+            break;
+        case Style::Space:
+            t.bg = {8, 5, 30}; t.ground = {25, 15, 70};
+            t.block = {170, 170, 255}; t.hazard = {255, 120, 255};
+            t.pulses = true;
+            break;
+        case Style::Sunset:
+            t.bg = {255, 110, 40}; t.ground = {120, 30, 60};
+            t.block = {255, 235, 190}; t.hazard = {90, 10, 60};
+            break;
+        case Style::Ice:
+            t.bg = {170, 225, 255}; t.ground = {80, 150, 215};
+            t.block = {255, 255, 255}; t.hazard = {40, 90, 190};
+            break;
+        case Style::Candy:
+            t.bg = {255, 140, 200}; t.ground = {200, 80, 160};
+            t.block = {255, 255, 255}; t.hazard = {120, 60, 255};
+            t.pulses = true; t.cycles = true;
             break;
     }
     return t;
@@ -417,6 +471,11 @@ std::vector<Section> presetSections(Settings const& s) {
         {2, 2, 2, 2, 2, 2, 2, 2},
         {1, 1, 0, 0, 8, 0, 0, 0},
         {1, 5, 0, 3, 1, 0, 0, 3},
+        {3, 2, 2, 1, 3, 1, 1, 0},
+        {1, 4, 0, 4, 2, 0, 0, 2},
+        {4, 3, 1, 1, 1, 1, 0, 1},
+        {3, 2, 1, 1, 2, 1, 1, 0},
+        {3, 1, 3, 2, 1, 2, 1, 1},
     };
     std::mt19937 rng(s.seed * 2654435761u + 17);
     auto ri = [&](int a, int b) { return std::uniform_int_distribution<int>(a, b)(rng); };
@@ -454,49 +513,150 @@ std::vector<Section> presetSections(Settings const& s) {
     return out;
 }
 
+namespace {
+
+// Whole-word match (an optional plural "s" is allowed), so "ice" does not match "service".
+bool hasWord(std::string const& text, std::string const& word) {
+    size_t pos = 0;
+    while ((pos = text.find(word, pos)) != std::string::npos) {
+        size_t end = pos + word.size();
+        bool startOk = pos == 0 || !std::isalnum((unsigned char)text[pos - 1]);
+        bool endOk = end == text.size() || !std::isalnum((unsigned char)text[end]) ||
+            (text[end] == 's' && (end + 1 == text.size() || !std::isalnum((unsigned char)text[end + 1])));
+        if (startOk && endOk) return true;
+        pos = end;
+    }
+    return false;
+}
+
+struct Tok {
+    std::string w;
+    bool num = false;
+    double v = 0;
+};
+
+std::vector<Tok> tokenize(std::string const& p) {
+    std::vector<Tok> out;
+    size_t i = 0;
+    while (i < p.size()) {
+        unsigned char c = p[i];
+        if (std::isdigit(c)) {
+            size_t j = i;
+            while (j < p.size() && (std::isdigit((unsigned char)p[j]) ||
+                   (p[j] == '.' && j + 1 < p.size() && std::isdigit((unsigned char)p[j + 1])))) j++;
+            Tok t;
+            t.num = true;
+            t.w = p.substr(i, j - i);
+            t.v = std::atof(t.w.c_str());
+            out.push_back(std::move(t));
+            i = j;
+        } else if (std::isalpha(c)) {
+            size_t j = i;
+            while (j < p.size() && std::isalpha((unsigned char)p[j])) j++;
+            Tok t;
+            t.w = p.substr(i, j - i);
+            out.push_back(std::move(t));
+            i = j;
+        } else {
+            i++;
+        }
+    }
+    return out;
+}
+
+bool modeFromWord(std::string w, Mode& out) {
+    if (w.size() > 3 && w.back() == 's') w.pop_back();
+    if (w == "cube" || w == "cubes") { out = Mode::Cube; return true; }
+    if (w == "ship" || w == "rocket") { out = Mode::Ship; return true; }
+    if (w == "ball" || w == "roll") { out = Mode::Ball; return true; }
+    if (w == "ufo") { out = Mode::Ufo; return true; }
+    if (w == "wave" || w == "dart") { out = Mode::Wave; return true; }
+    if (w == "robot") { out = Mode::Robot; return true; }
+    if (w == "spider") { out = Mode::Spider; return true; }
+    if (w == "swing" || w == "copter") { out = Mode::Swing; return true; }
+    return false;
+}
+
+int speedFromWord(std::string const& w) {
+    if (w == "slow" || w == "slower" || w == "half") return 0;
+    if (w == "normal") return 1;
+    if (w == "fast" || w == "faster" || w == "double") return 2;
+    if (w == "triple") return 3;
+    if (w == "quad" || w == "quadruple" || w == "fastest") return 4;
+    return -1;
+}
+
+int speedFromMultiplier(double v) {
+    if (v < 0.75) return 0;
+    if (v < 1.5) return 1;
+    if (v < 2.5) return 2;
+    if (v < 3.5) return 3;
+    return 4;
+}
+
+// "s", "sec", "seconds" -> 1, "min", "minutes" -> 60, anything else -> 0
+int unitSeconds(std::string const& w) {
+    if (w == "s" || w == "sec" || w == "secs" || w == "second" || w == "seconds") return 1;
+    if (w == "m" || w == "min" || w == "mins" || w == "minute" || w == "minutes") return 60;
+    return 0;
+}
+
+struct NamedColor { char const* name; Color c; };
+const NamedColor COLORS[] = {
+    {"red", {200, 20, 20}}, {"blue", {30, 90, 255}}, {"green", {30, 200, 60}},
+    {"purple", {140, 50, 220}}, {"pink", {255, 110, 190}}, {"orange", {255, 140, 30}},
+    {"yellow", {255, 220, 40}}, {"black", {10, 10, 10}}, {"white", {240, 240, 240}},
+    {"cyan", {0, 220, 230}},
+};
+
+int luminance(Color c) { return (c.r * 3 + c.g * 6 + c.b) / 10; }
+
+std::string fmt_plan_header(Settings const& s) {
+    char buf[160];
+    std::snprintf(buf, sizeof buf, "%s style, difficulty %d/10, seed %u. Plan: ",
+        styleName(s.style), s.difficulty, s.seed);
+    return buf;
+}
+
+} // namespace
+
 std::string applyPromptKeywords(std::string const& prompt, Settings& s) {
     std::string p = lower(prompt);
     bool gotDifficulty = true;
 
-    if (has(p, "extreme")) s.difficulty = 10;
-    else if (has(p, "insane demon")) s.difficulty = 9;
-    else if (has(p, "easy demon")) s.difficulty = 7;
-    else if (has(p, "demon")) s.difficulty = 8;
-    else if (has(p, "insane")) s.difficulty = 6;
-    else if (has(p, "harder")) s.difficulty = 5;
-    else if (has(p, "hard")) s.difficulty = 4;
-    else if (has(p, "normal")) s.difficulty = 3;
-    else if (has(p, "easy")) s.difficulty = 2;
+    if (hasWord(p, "extreme")) s.difficulty = 10;
+    else if (hasWord(p, "insane demon")) s.difficulty = 9;
+    else if (hasWord(p, "easy demon")) s.difficulty = 7;
+    else if (hasWord(p, "demon")) s.difficulty = 8;
+    else if (hasWord(p, "insane")) s.difficulty = 6;
+    else if (hasWord(p, "harder")) s.difficulty = 5;
+    else if (hasWord(p, "hard")) s.difficulty = 4;
+    else if (hasWord(p, "normal")) s.difficulty = 3;
+    else if (hasWord(p, "easy")) s.difficulty = 2;
+    else if (hasWord(p, "auto")) s.difficulty = 1;
     else gotDifficulty = false;
 
-    if (has(p, "hell") || has(p, "blood") || has(p, "dark") || has(p, "lava")) {
+    if (hasWord(p, "hell") || hasWord(p, "blood") || hasWord(p, "bloodbath") || hasWord(p, "dark") || hasWord(p, "lava")) {
         s.style = Style::HellDemon;
-        if (!gotDifficulty && has(p, "bloodbath")) s.difficulty = 10;
+        if (hasWord(p, "bloodbath")) s.difficulty = gotDifficulty ? std::max(s.difficulty, 9) : 10;
     }
-    else if (has(p, "wave")) s.style = Style::WaveRush;
-    else if (has(p, "ship") || has(p, "fly") || has(p, "flight") || has(p, "sky")) s.style = Style::SkyFlight;
-    else if (has(p, "neon") || has(p, "mix") || has(p, "rainbow") || has(p, "colorful")) s.style = Style::NeonMix;
-    else if (has(p, "classic") || has(p, "simple")) s.style = Style::Classic;
+    else if (hasWord(p, "toxic") || hasWord(p, "acid") || hasWord(p, "poison") || hasWord(p, "slime")) s.style = Style::Toxic;
+    else if (hasWord(p, "space") || hasWord(p, "galaxy") || hasWord(p, "star") || hasWord(p, "cosmic")) s.style = Style::Space;
+    else if (hasWord(p, "sunset") || hasWord(p, "sunrise") || hasWord(p, "desert")) s.style = Style::Sunset;
+    else if (hasWord(p, "ice") || hasWord(p, "snow") || hasWord(p, "frozen") || hasWord(p, "winter")) s.style = Style::Ice;
+    else if (hasWord(p, "candy") || hasWord(p, "sweet") || hasWord(p, "cute")) s.style = Style::Candy;
+    else if (hasWord(p, "neon") || hasWord(p, "mix") || hasWord(p, "rainbow") || hasWord(p, "colorful")) s.style = Style::NeonMix;
+    else if (hasWord(p, "classic") || hasWord(p, "simple")) s.style = Style::Classic;
 
-    if (has(p, "tiny")) s.seconds = 15;
-    else if (has(p, "very long") || has(p, "extra long") || has(p, " xl")) s.seconds = 120;
-    else if (has(p, "short")) s.seconds = 25;
-    else if (has(p, "medium")) s.seconds = 45;
-    else if (has(p, "long")) s.seconds = 75;
+    if (hasWord(p, "tiny")) s.seconds = 15;
+    else if (hasWord(p, "very long") || hasWord(p, "extra long") || hasWord(p, "xl")) s.seconds = 120;
+    else if (hasWord(p, "short")) s.seconds = 25;
+    else if (hasWord(p, "medium")) s.seconds = 45;
+    else if (hasWord(p, "long")) s.seconds = 75;
 
-    // "90s", "90 sec", "2 min", "seed 42"
-    for (size_t i = 0; i < p.size(); i++) {
-        if (!std::isdigit((unsigned char)p[i]) || (i > 0 && std::isdigit((unsigned char)p[i - 1]))) continue;
-        size_t j = i;
-        while (j < p.size() && std::isdigit((unsigned char)p[j])) j++;
-        if (j - i > 6) continue;
-        int value = std::atoi(p.substr(i, j - i).c_str());
-        std::string after = p.substr(j, 4);
-        if (!after.empty() && after[0] == ' ') after.erase(0, 1);
-        std::string before = i >= 5 ? p.substr(i - 5, 5) : p.substr(0, i);
-        if (has(before, "seed")) s.seed = (uint32_t)value;
-        else if (after.rfind("min", 0) == 0) s.seconds = (float)value * 60;
-        else if (after.rfind("s", 0) == 0 && value >= 5) s.seconds = (float)value;
+    auto toks = tokenize(p);
+    for (size_t i = 0; i + 1 < toks.size(); i++) {
+        if (toks[i].w == "seed" && toks[i + 1].num) s.seed = (uint32_t)toks[i + 1].v;
     }
     s.seconds = std::clamp(s.seconds, 5.f, 600.f);
 
@@ -504,6 +664,128 @@ std::string applyPromptKeywords(std::string const& prompt, Settings& s) {
     std::snprintf(buf, sizeof buf, "%s, difficulty %d/10, about %ds, seed %u",
         styleName(s.style), s.difficulty, (int)s.seconds, s.seed);
     return buf;
+}
+
+PromptPlan planFromPrompt(std::string const& prompt, Settings base) {
+    PromptPlan plan;
+    Settings& s = plan.settings;
+    s = base;
+    std::string p = lower(prompt);
+    applyPromptKeywords(prompt, s);
+
+    auto toks = tokenize(p);
+    int n = (int)toks.size();
+
+    // 1. modes, in the order they are written
+    std::vector<int> modePos;
+    std::vector<Section> secs;
+    for (int i = 0; i < n; i++) {
+        Mode m;
+        if (!toks[i].num && modeFromWord(toks[i].w, m)) {
+            Section sec;
+            sec.mode = m;
+            sec.speed = -1;
+            sec.seconds = -1;
+            sec.difficulty = s.difficulty;
+            secs.push_back(sec);
+            modePos.push_back(i);
+        }
+    }
+
+    // nearest mode within `reach` tokens that still lacks the property (prefers the one after)
+    auto nearest = [&](int pos, int reach, auto lacks) -> int {
+        int best = -1, bestDist = reach + 1;
+        for (int k = 0; k < (int)modePos.size(); k++) {
+            if (!lacks(secs[k])) continue;
+            int d = modePos[k] - pos;
+            int dist = d >= 0 ? d : -d + 1; // a mode after the word wins a tie
+            if (dist <= reach && dist < bestDist) { best = k; bestDist = dist; }
+        }
+        return best;
+    };
+
+    int globalSpeed = -1;
+    bool totalGiven = false;
+    std::vector<std::string> notes;
+
+    // 2. durations and speeds
+    for (int i = 0; i < n; i++) {
+        if (toks[i].num) {
+            if (i > 0 && toks[i - 1].w == "seed") continue;
+            std::string unit = i + 1 < n && !toks[i + 1].num ? toks[i + 1].w : "";
+            if (unit == "x") {
+                int sp = speedFromMultiplier(toks[i].v);
+                int k = nearest(i, 3, [](Section const& x) { return x.speed < 0; });
+                if (k >= 0) secs[k].speed = sp; else globalSpeed = sp;
+            } else if (int mult = unitSeconds(unit)) {
+                float d = (float)(toks[i].v * mult);
+                int k = nearest(i, 6, [](Section const& x) { return x.seconds < 0; });
+                if (k >= 0) secs[k].seconds = d;
+                else { s.seconds = std::clamp(d, 5.f, 600.f); totalGiven = true; }
+            }
+        } else {
+            int sp = speedFromWord(toks[i].w);
+            if (sp < 0) continue;
+            // "double" / "triple" next to "speed" or a mode; "normal" is also a difficulty word
+            int k = nearest(i, 3, [](Section const& x) { return x.speed < 0; });
+            if (k >= 0) secs[k].speed = sp; else globalSpeed = sp;
+        }
+    }
+    (void)totalGiven;
+
+    // 3. fill in what the prompt did not say
+    int d = s.difficulty;
+    int defaultSpeed = globalSpeed >= 0 ? globalSpeed : (d <= 4 ? 1 : d <= 7 ? 2 : 3);
+    if (secs.empty()) {
+        plan.sections = presetSections(s);
+        if (globalSpeed >= 0) for (auto& sec : plan.sections) sec.speed = globalSpeed;
+    } else {
+        float specified = 0;
+        int unset = 0;
+        for (auto const& sec : secs) { if (sec.seconds >= 0) specified += sec.seconds; else unset++; }
+        float each = 6;
+        if (unset > 0 && s.seconds > specified) each = std::max(5.f, (s.seconds - specified) / unset);
+        for (auto& sec : secs) {
+            if (sec.seconds < 0) sec.seconds = each;
+            if (sec.speed < 0) sec.speed = defaultSpeed;
+        }
+        plan.sections = secs;
+    }
+
+    // 4. colours
+    plan.theme = presetTheme(s.style);
+    std::vector<Color> picked;
+    std::vector<std::string> colorNames;
+    for (auto const& tok : toks) {
+        for (auto const& nc : COLORS) {
+            if (tok.w == nc.name) { picked.push_back(nc.c); colorNames.push_back(nc.name); }
+        }
+    }
+    if (!picked.empty()) {
+        plan.theme.bg = scaled(picked[0], 0.55f);
+        plan.theme.ground = scaled(picked[0], 0.8f);
+        plan.theme.block = luminance(picked[0]) > 170 ? Color{30, 30, 60} : Color{255, 255, 255};
+        if (picked.size() > 1) plan.theme.hazard = picked[1];
+        else plan.theme.hazard = luminance(picked[0]) > 90 ? Color{255, 255, 255} : Color{255, 80, 80};
+    }
+
+    // 5. say what was understood
+    static const char* SPEEDS[] = {"0.5x", "1x", "2x", "3x", "4x"};
+    std::string text = fmt_plan_header(s);
+    for (size_t i = 0; i < plan.sections.size(); i++) {
+        auto const& sec = plan.sections[i];
+        char buf[80];
+        std::snprintf(buf, sizeof buf, "%s%ds %s at %s", i ? " > " : "", (int)std::lround(sec.seconds),
+            modeName(sec.mode), SPEEDS[std::clamp(sec.speed, 0, 4)]);
+        text += buf;
+        if (text.size() > 600) { text += " ..."; break; }
+    }
+    if (!colorNames.empty()) {
+        text += ". Colours: ";
+        for (size_t i = 0; i < colorNames.size(); i++) text += (i ? ", " : "") + colorNames[i];
+    }
+    plan.summary = text;
+    return plan;
 }
 
 Result generate(Request const& req) {
@@ -536,7 +818,8 @@ Result generate(Request const& req) {
         int n = std::max(30, (int)std::lround(sec.seconds * SPEED_BPS[sec.speed]));
 
         if (req.applyTheme && index > 0) {
-            Color bg = index % 2 ? scaled(req.theme.bg, 0.6f) : req.theme.bg;
+            Color base = req.theme.cycles ? rotated(req.theme.bg, index) : req.theme.bg;
+            Color bg = index % 2 ? scaled(base, 0.6f) : base;
             g.colorTrigger((float)x, 12, CH_BG, bg, 0.5f);
         }
         if (req.applyTheme && req.theme.pulses) {
@@ -551,6 +834,8 @@ Result generate(Request const& req) {
         prevSpeed = sec.speed;
         index++;
     }
+
+    sanitize(g.out);
 
     Result res;
     res.endBlock = (float)x + 6;
